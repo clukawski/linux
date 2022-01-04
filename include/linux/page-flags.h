@@ -141,6 +141,9 @@ enum pageflags {
 #ifdef CONFIG_KASAN_HW_TAGS
 	PG_skip_kasan_poison,
 #endif
+#ifdef CONFIG_RAMCRYPT
+	PG_ramcrypt,
+#endif
 	__NR_PAGEFLAGS,
 
 	PG_readahead = PG_reclaim,
@@ -497,6 +500,12 @@ SETPAGEFLAG(SwapCache, swapcache, PF_NO_TAIL)
 CLEARPAGEFLAG(SwapCache, swapcache, PF_NO_TAIL)
 #else
 PAGEFLAG_FALSE(SwapCache, swapcache)
+#endif
+
+#ifdef CONFIG_RAMCRYPT
+PAGEFLAG(Ramcrypt, ramcrypt)
+#else
+PAGEFLAG_FALSE(Ramcrypt)
 #endif
 
 PAGEFLAG(Unevictable, unevictable, PF_HEAD)

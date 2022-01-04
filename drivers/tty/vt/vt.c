@@ -107,6 +107,10 @@
 #include <linux/bsearch.h>
 #include <linux/gcd.h>
 
+#ifdef CONFIG_CRYPTO_TRESOR_PROMPT
+#include <crypto/tresor.h>
+#endif
+
 #define MAX_NR_CON_DRIVER 16
 
 #define CON_DRIVER_FLAG_MODULE 1
@@ -232,6 +236,16 @@ enum {
 	blank_normal_wait,
 	blank_vesa_wait,
 };
+
+#ifdef CONFIG_CRYPTO_TRESOR_PROMPT
+/* Dont allow to switch console while reading TRESOR key on wakeup */
+static int dont_switch_console;
+
+void tresor_dont_switch_console(dont_switch)
+{
+	dont_switch_console = dont_switch;
+}
+#endif
 
 /*
  * /sys/class/tty/tty0/
@@ -2977,6 +2991,11 @@ rescan_last_byte:
  */
 static void console_callback(struct work_struct *ignored)
 {
+#ifdef CONFIG_CRYPTO_TRESOR_PROMPT
+	if (dont_switch_console)
+		return;
+#endif
+
 	console_lock();
 
 	if (want_console >= 0) {

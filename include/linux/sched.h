@@ -1428,6 +1428,10 @@ struct task_struct {
 # ifdef CONFIG_PREEMPT_RT
 	unsigned long			saved_state_change;
 # endif
+#ifdef CONFIG_RAMCRYPT
+	unsigned ramcrypt_enabled:1;
+	unsigned long ramcrypt_iv;
+#endif /* CONFIG_RAMCRYPT */
 #endif
 	int				pagefault_disabled;
 #ifdef CONFIG_MMU

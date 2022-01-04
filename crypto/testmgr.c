@@ -35,6 +35,9 @@
 #include <crypto/acompress.h>
 #include <crypto/internal/cipher.h>
 #include <crypto/internal/simd.h>
+#ifdef CONFIG_CRYPTO_TRESOR
+#include <crypto/tresor.h>
+#endif
 
 #include "internal.h"
 
@@ -157,6 +160,20 @@ struct alg_test_desc {
 		struct kpp_test_suite kpp;
 	} suite;
 };
+
+#ifdef CONFIG_CRYPTO_TRESOR
+/* Prevent the test manager from overwriting dbg regs with test keys */
+static int tresor_tests_locked = 1;
+
+void tresor_lock_tests(void) { tresor_tests_locked = 1; }
+EXPORT_SYMBOL(tresor_lock_tests);
+
+void tresor_unlock_tests(void) { tresor_tests_locked = 0; }
+EXPORT_SYMBOL(tresor_unlock_tests);
+
+int tresor_lock_status(void) { return tresor_tests_locked; }
+EXPORT_SYMBOL(tresor_lock_status);
+#endif
 
 static void hexdump(unsigned char *buf, unsigned int len)
 {
@@ -2617,6 +2634,15 @@ static int test_cipher(struct crypto_cipher *tfm, int enc,
 	else
 		e = "decryption";
 
+#ifdef CONFIG_CRYPTO_TRESOR
+	if (strstr(algo, "tresor")) {
+		if (tresor_tests_locked) {
+			ret = 0;
+			goto out;
+		}
+	}
+#endif
+
 	j = 0;
 	for (i = 0; i < tcount; i++) {
 
@@ -2637,6 +2663,11 @@ static int test_cipher(struct crypto_cipher *tfm, int enc,
 		crypto_cipher_clear_flags(tfm, ~0);
 		if (template[i].wk)
 			crypto_cipher_set_flags(tfm, CRYPTO_TFM_REQ_FORBID_WEAK_KEYS);
+
+#ifdef CONFIG_CRYPTO_TRESOR
+		if (strstr(algo, "tresor"))
+			tresor_setkey(template[i].key);
+#endif
 
 		ret = crypto_cipher_setkey(tfm, template[i].key,
 					   template[i].klen);
@@ -4429,6 +4460,23 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.cipher = __VECS(sm4_cbc_tv_template)
 		}
 	}, {
+#ifdef CONFIG_CRYPTO_TRESOR
+		.alg = "cbc(tresor)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = aes_cbc_enc_tv_template,
+					.count = AES_CBC_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = aes_cbc_dec_tv_template,
+					.count = AES_CBC_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+#endif
 		.alg = "cbc(twofish)",
 		.test = alg_test_skcipher,
 		.suite = {
@@ -4897,6 +4945,23 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.cipher = __VECS(tea_tv_template)
 		}
 	}, {
+#ifdef CONFIG_CRYPTO_TRESOR
+		.alg = "ecb(tresor)",
+		.test = alg_test_skcipher,
+		.suite = {
+			.cipher = {
+				.enc = {
+					.vecs = aes_enc_tv_template,
+					.count = AES_ENC_TEST_VECTORS
+				},
+				.dec = {
+					.vecs = aes_dec_tv_template,
+					.count = AES_DEC_TEST_VECTORS
+				}
+			}
+		}
+	}, {
+#endif
 		.alg = "ecb(twofish)",
 		.test = alg_test_skcipher,
 		.suite = {

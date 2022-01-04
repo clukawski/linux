@@ -173,7 +173,13 @@ static inline int pte_exec(pte_t pte)
 
 static inline int pte_special(pte_t pte)
 {
-	return pte_flags(pte) & _PAGE_SPECIAL;
+	return pte_flags(pte) & _PAGE_SPECIAL &&
+		(pte_flags(pte) & _PAGE_RAMCRYPT);
+}
+
+static inline int pte_ramcrypt(pte_t pte)
+{
+	return pte_flags(pte) & _PAGE_RAMCRYPT;
 }
 
 /* Entries that were set to PROT_NONE are inverted */
@@ -360,6 +366,26 @@ static inline pte_t pte_clrglobal(pte_t pte)
 static inline pte_t pte_mkspecial(pte_t pte)
 {
 	return pte_set_flags(pte, _PAGE_SPECIAL);
+}
+
+static inline pte_t pte_mkramcrypt(pte_t pte)
+{
+	return pte_set_flags(pte, _PAGE_RAMCRYPT);
+}
+
+static inline pte_t pte_mkpresent(pte_t pte)
+{
+	return pte_set_flags(pte, _PAGE_PRESENT);
+}
+
+static inline pte_t pte_clrramcrypt(pte_t pte)
+{
+	return pte_clear_flags(pte, _PAGE_RAMCRYPT);
+}
+
+static inline pte_t pte_clrpresent(pte_t pte)
+{
+	return pte_clear_flags(pte, _PAGE_PRESENT);
 }
 
 static inline pte_t pte_mkdevmap(pte_t pte)
@@ -735,7 +761,7 @@ static inline int pte_same(pte_t a, pte_t b)
 
 static inline int pte_present(pte_t a)
 {
-	return pte_flags(a) & (_PAGE_PRESENT | _PAGE_PROTNONE);
+	return pte_flags(a) & (_PAGE_PRESENT | _PAGE_PROTNONE | _PAGE_RAMCRYPT);
 }
 
 #ifdef CONFIG_ARCH_HAS_PTE_DEVMAP
@@ -776,7 +802,7 @@ static inline int pmd_present(pmd_t pmd)
  */
 static inline int pte_protnone(pte_t pte)
 {
-	return (pte_flags(pte) & (_PAGE_PROTNONE | _PAGE_PRESENT))
+	return (pte_flags(pte) & (_PAGE_PROTNONE | _PAGE_PRESENT | _PAGE_RAMCRYPT))
 		== _PAGE_PROTNONE;
 }
 

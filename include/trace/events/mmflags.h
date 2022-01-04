@@ -107,6 +107,9 @@
 	{1UL << PG_owner_priv_1,	"owner_priv_1"	},		\
 	{1UL << PG_arch_1,		"arch_1"	},		\
 	{1UL << PG_reserved,		"reserved"	},		\
+#ifdef CONFIG_RAMCRYPT
+	{1UL << PG_ramcrypt,		"ramcrypt"	},		\
+#endif
 	{1UL << PG_private,		"private"	},		\
 	{1UL << PG_private_2,		"private_2"	},		\
 	{1UL << PG_writeback,		"writeback"	},		\

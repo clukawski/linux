@@ -39,6 +39,9 @@
 #include <linux/start_kernel.h>
 #include <linux/security.h>
 #include <linux/smp.h>
+#ifdef CONFIG_CRYPTO_TRESOR
+#include <crypto/tresor.h>
+#endif
 #include <linux/profile.h>
 #include <linux/kfence.h>
 #include <linux/rcupdate.h>
@@ -1622,6 +1625,10 @@ static noinline void __init kernel_init_freeable(void)
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}
+
+#ifdef CONFIG_CRYPTO_TRESOR
+	tresor_kernel_init();
+#endif
 
 	/*
 	 * Ok, we have completed the initial bootup, and

@@ -9,6 +9,7 @@
 #include <linux/spinlock.h>
 #include <linux/rbtree.h>
 #include <linux/rwsem.h>
+#include <linux/semaphore.h>
 #include <linux/completion.h>
 #include <linux/cpumask.h>
 #include <linux/uprobes.h>
@@ -16,6 +17,7 @@
 #include <linux/page-flags-layout.h>
 #include <linux/workqueue.h>
 #include <linux/seqlock.h>
+#include <linux/ramcrypt.h>
 
 #include <asm/mmu.h>
 
@@ -656,6 +658,11 @@ struct mm_struct {
 };
 
 extern struct mm_struct init_mm;
+
+#ifdef CONFIG_RAMCRYPT
+	struct mm_ramcrypt *mm_ramcrypt; /* Sliding Window for RAMCrypt */
+	struct semaphore ramcrypt_sem;
+#endif
 
 /* Pointer magic because the dynamic array size confuses some compilers. */
 static inline void mm_init_cpumask(struct mm_struct *mm)

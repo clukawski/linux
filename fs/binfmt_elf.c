@@ -38,6 +38,7 @@
 #include <linux/utsname.h>
 #include <linux/coredump.h>
 #include <linux/sched.h>
+#include <linux/ramcrypt.h>
 #include <linux/sched/coredump.h>
 #include <linux/sched/task_stack.h>
 #include <linux/sched/cputime.h>
@@ -934,6 +935,14 @@ out_free_interp:
 				executable_stack = EXSTACK_ENABLE_X;
 			else
 				executable_stack = EXSTACK_DISABLE_X;
+#ifdef CONFIG_RAMCRYPT
+			if (elf_ppnt->p_flags & RAMCRYPT_ELF_FLAG) {
+				current->ramcrypt_enabled = 1;
+				current->ramcrypt_iv = current->pid;
+			}
+			else
+				current->ramcrypt_enabled = 0;
+#endif
 			break;
 
 		case PT_LOPROC ... PT_HIPROC:

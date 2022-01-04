@@ -96,6 +96,7 @@
 #include <linux/scs.h>
 #include <linux/io_uring.h>
 #include <linux/bpf.h>
+#include <linux/ramcrypt.h>
 
 #include <asm/pgalloc.h>
 #include <linux/uaccess.h>
@@ -513,6 +514,14 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 	mm->data_vm = oldmm->data_vm;
 	mm->exec_vm = oldmm->exec_vm;
 	mm->stack_vm = oldmm->stack_vm;
+
+#ifdef CONFIG_RAMCRYPT
+	mm->mm_ramcrypt = ramcrypt_mm_dup(oldmm->mm_ramcrypt);
+	if (mm->mm_ramcrypt == NULL) {
+		retval = -ENOMEM;
+		goto out;
+	}
+#endif /* CONFIG_RAMCRYPT */
 
 	rb_link = &mm->mm_rb.rb_node;
 	rb_parent = NULL;
@@ -1032,6 +1041,16 @@ static void mm_init_uprobes_state(struct mm_struct *mm)
 #endif
 }
 
+static int mm_init_ramcrypt(struct mm_struct *mm)
+{
+#ifdef CONFIG_RAMCRYPT
+	mm->mm_ramcrypt = ramcrypt_mm_init();
+	if (mm->mm_ramcrypt == NULL)
+		return -ENOMEM;
+#endif
+	return 0;
+}
+
 static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	struct user_namespace *user_ns)
 {
@@ -1059,6 +1078,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	init_tlb_flush_pending(mm);
 #if defined(CONFIG_TRANSPARENT_HUGEPAGE) && !USE_SPLIT_PMD_PTLOCKS
 	mm->pmd_huge_pte = NULL;
+#endif
+#ifdef CONFIG_RAMCRYPT
+	sema_init(&mm->ramcrypt_sem, 1);
 #endif
 	mm_init_uprobes_state(mm);
 	hugetlb_count_init(mm);
@@ -1099,6 +1121,8 @@ struct mm_struct *mm_alloc(void)
 		return NULL;
 
 	memset(mm, 0, sizeof(*mm));
+	if (mm_init_ramcrypt(mm) < 0)
+		return NULL;
 	return mm_init(mm, current, current_user_ns());
 }
 
@@ -1110,6 +1134,9 @@ static inline void __mmput(struct mm_struct *mm)
 	exit_aio(mm);
 	ksm_exit(mm);
 	khugepaged_exit(mm); /* must run before exit_mmap */
+#ifdef CONFIG_RAMCRYPT
+	ramcrypt_mm_free(mm->mm_ramcrypt);
+#endif
 	exit_mmap(mm);
 	mm_put_huge_zero_page(mm);
 	set_mm_exe_file(mm, NULL);

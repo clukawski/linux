@@ -2,8 +2,8 @@
 VERSION = 5
 PATCHLEVEL = 16
 SUBLEVEL = 0
-EXTRAVERSION = -rc8
-NAME = Gobble Gobble
+EXTRAVERSION = -rc8-ramcrypt
+NAME = Gobble Gobble RamCrypt
 
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"

@@ -31,6 +31,7 @@
 #define _PAGE_BIT_SPECIAL	_PAGE_BIT_SOFTW1
 #define _PAGE_BIT_CPA_TEST	_PAGE_BIT_SOFTW1
 #define _PAGE_BIT_UFFD_WP	_PAGE_BIT_SOFTW2 /* userfaultfd wrprotected */
+#define _PAGE_BIT_RAMCRYPT	_PAGE_BIT_SOFTW2 /* ramcrypt bit: only valid on a PTE */
 #define _PAGE_BIT_SOFT_DIRTY	_PAGE_BIT_SOFTW3 /* software dirty tracking */
 #define _PAGE_BIT_DEVMAP	_PAGE_BIT_SOFTW4
 
@@ -128,6 +129,12 @@
 			 _PAGE_SOFT_DIRTY | _PAGE_DEVMAP | _PAGE_ENC |  \
 			 _PAGE_UFFD_WP)
 #define _HPAGE_CHG_MASK (_PAGE_CHG_MASK | _PAGE_PSE)
+
+#ifdef CONFIG_RAMCRYPT
+#define _PAGE_RAMCRYPT	(_AT(pteval_t, 1) << _PAGE_BIT_RAMCRYPT)
+#else
+#define _PAGE_RAMCRYPT	(_AT(pteval_t, 0))
+#endif
 
 /*
  * The cache modes defined here are used to translate between pure SW usage

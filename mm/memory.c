@@ -1357,6 +1357,14 @@ again:
 			page_remove_rmap(page, false);
 			if (unlikely(page_mapcount(page) < 0))
 				print_bad_pte(vma, addr, ptent, page);
+#ifdef CONFIG_RAMCRYPT
+			if (current->ramcrypt_enabled
+			    && page_mapcount(page) == 0 && PageAnon(page)) {
+				void *maddr = kmap(page);
+				clear_page(maddr);
+				kunmap(page);
+			}
+#endif /* CONFIG_RAMCRYPT */
 			if (unlikely(__tlb_remove_page(tlb, page))) {
 				force_flush = 1;
 				addr += PAGE_SIZE;
@@ -2079,7 +2087,7 @@ out_unlock:
  *
  * This only makes sense for IO mappings, and it makes no sense for
  * COW mappings.  In general, using multiple vmas is preferable;
- * vmf_insert_pfn_prot should only be used if using multiple VMAs is
+ * vmf_insert_pfn_prot should only be used if sing multiple VMAs is
  * impractical.
  *
  * See vmf_insert_mixed_prot() for a discussion of the implication of using
@@ -4478,6 +4486,78 @@ static vm_fault_t wp_huge_pud(struct vm_fault *vmf, pud_t orig_pud)
 	return VM_FAULT_FALLBACK;
 }
 
+static int do_ramcrypt_page(struct mm_struct *mm, struct vm_area_struct *vma,
+		unsigned long address, pte_t *pte, pmd_t *pmd,
+		unsigned int flags, pte_t orig_pte)
+{
+	struct page *page;
+	spinlock_t *ptl;
+	pte_t entry;
+	void *maddr;
+	int ret = 0;
+
+	down(&mm->ramcrypt_sem);
+
+	ptl = pte_lockptr(mm, pmd);
+	spin_lock(ptl);
+	if (unlikely(!pte_same(*pte, orig_pte)))
+		goto unlock;
+
+	if ((vma->vm_flags & VM_DONOTRAMCRYPT) != 0 || vma->vm_file != NULL) {
+		/* Either shared or non-private mapping! */
+		printk(KERN_ALERT "RAMCrypt: FATAL: Attempt to decrypt shared"
+			" or non-private page (virt=0x%p).\n",
+			(void *)(address & PAGE_MASK));
+		ret = VM_FAULT_SIGBUS;
+		goto unlock;
+	}
+
+	page = vm_normal_page(vma, address, orig_pte);
+	if (!page) {
+		printk(KERN_ALERT "RAMCrypt: FATAL: Attempt to decrypt"
+			" non-normal page (virt=0x%p).\n",
+			(void *)(address & PAGE_MASK));
+		ret = VM_FAULT_SIGBUS;
+		goto unlock;
+	}
+	if (!trylock_page(page)) {
+		/* avoid deadlock by redoing pagefault */
+		goto unlock;
+	}
+	if (!PageAnon(page)) {
+		/* Not an anonymous page! */
+		printk(KERN_ALERT "RAMCrypt: FATAL: Attempt to decrypt"
+			" non-anonymous page (virt=0x%p).\n",
+			(void *)(address & PAGE_MASK));
+		ret = VM_FAULT_SIGBUS;
+		goto unlock_page;
+	}
+
+	if (PageRamcrypt(page)) {
+		maddr = kmap(page);
+		ramcrypt_page_decrypt(maddr, address & PAGE_MASK,
+					current->ramcrypt_iv);
+		kunmap(page);
+		ClearPageRamcrypt(page);
+	}
+
+	/* set present and clr ramcrypt bit */
+	flush_cache_page(vma, address, pte_pfn(orig_pte));
+	entry = pte_mkdirty(orig_pte);
+	entry = pte_mkpresent(entry);
+	entry = pte_clrramcrypt(entry);
+	ptep_clear_flush_notify(vma, address, pte);
+	set_pte_at_notify(mm, address, pte, entry);
+	update_mmu_cache(vma, address, pte);
+
+unlock_page:
+	unlock_page(page);
+unlock:
+	pte_unmap_unlock(pte, ptl);
+	up(&mm->ramcrypt_sem);
+	return ret;
+}
+
 /*
  * These routines also need to handle stuff like marking pages dirty
  * and/or accessed for architectures that don't do it in hardware (most
@@ -4554,6 +4634,10 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 	if (!pte_present(vmf->orig_pte))
 		return do_swap_page(vmf);
 
+	if (pte_ramcrypt(entry))
+		return do_ramcrypt_page(mm, vma, address,
+				pte, pmd, flags, entry);
+
 	if (pte_protnone(vmf->orig_pte) && vma_is_accessible(vmf->vma))
 		return do_numa_page(vmf);
 
@@ -4589,6 +4673,209 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 unlock:
 	pte_unmap_unlock(vmf->pte, vmf->ptl);
 	return 0;
+}
+
+static int handle_pte_ramcrypt_fault(struct mm_struct *mm,
+		     struct vm_area_struct *vma, unsigned long address,
+		     pte_t *pte, pmd_t *pmd, unsigned int flags)
+{
+#ifdef CONFIG_RAMCRYPT
+
+	struct vm_area_struct *evma;
+	unsigned long encaddr = 0;
+	struct page *page, *new_page = 0;
+	struct mem_cgroup *memcg;
+	unsigned long mmun_start;
+	unsigned long mmun_end;
+	spinlock_t *eptl;
+	pte_t entry;
+	pgd_t *epgd;
+	pud_t *epud;
+	pmd_t *epmd;
+	pte_t *epte;
+	void *maddr;
+	int ret;
+
+	/* call original pte fault handler */
+	ret = handle_pte_fault(mm, vma, address, pte, pmd, flags);
+	if (ret != 0)
+		return ret;
+
+	/* is ramcrypt enabled for this task? */
+	if (!current->ramcrypt_enabled)
+		return 0;
+
+	/* we do not encrypt shared or non-private mappings */
+	if ((vma->vm_flags & VM_DONOTRAMCRYPT) != 0 || vma->vm_file != NULL)
+		return 0;
+
+	ret = 0;
+	down(&mm->ramcrypt_sem);
+
+	/* insert the just handled page into the sliding window */
+	ramcrypt_mm_lock(mm->mm_ramcrypt);
+	ret = ramcrypt_mm_sw_append(mm->mm_ramcrypt, address);
+	/* if there are already enough pages in sw, pop one for encryption */
+	if (likely(ret >= 0) && (mm->mm_ramcrypt->sw_size > RAMCRYPT_SW_SIZE))
+		encaddr = ramcrypt_mm_sw_pop(mm->mm_ramcrypt);
+	ramcrypt_mm_unlock(mm->mm_ramcrypt);
+	if (ret < 0) {
+		ret = VM_FAULT_OOM;
+		goto release_sem;
+	}
+	if (encaddr == 0)
+		goto release_sem;
+
+	/* get the VMA for the address of the page we want to encrypt */
+	evma = find_vma(mm, encaddr);
+	if (!evma) {
+		/* the VMA somehow disappeared ... is this an error? */
+		goto release_sem;
+	}
+
+	/* get the PTE for the page we want to encrypt */
+	epgd = pgd_offset(mm, encaddr);
+	if (pgd_none(*epgd) || unlikely(pgd_bad(*epgd)))
+		goto release_sem;
+
+	epud = pud_offset(epgd, encaddr);
+	if (pud_none(*epud) || unlikely(pud_bad(*epud)))
+		goto release_sem;
+
+	epmd = pmd_offset(epud, encaddr);
+	VM_BUG_ON(pmd_trans_huge(*epmd));
+	if (pmd_none(*epmd) || unlikely(pmd_bad(*epmd)))
+		goto release_sem;
+
+	if (pmd_huge(*epmd))
+		goto release_sem;
+
+	epte = pte_offset_map_lock(mm, epmd, encaddr, &eptl);
+	if (!epte)
+		goto release_sem;
+
+	/* PTE should be present */
+	if (!pte_present(*epte)) {
+		ret = 0;
+		goto unlock;
+	}
+
+	/* PTE must not be encrypted */
+	if (pte_ramcrypt(*epte)) {
+		ret = 0;
+		goto unlock;
+	}
+
+	/* get the actual page to encrypt */
+	page = vm_normal_page(evma, encaddr, *epte);
+	if (!page) {
+		ret = 0;
+		goto unlock;
+	}
+	if (!trylock_page(page)) {
+		/* avoid deadlock by deferring encryption */
+		ramcrypt_mm_lock(mm->mm_ramcrypt);
+		if (ramcrypt_mm_sw_append(mm->mm_ramcrypt, encaddr) < 0)
+			ret = VM_FAULT_OOM;
+		else
+			ret = 0;
+		ramcrypt_mm_unlock(mm->mm_ramcrypt);
+		goto unlock;
+	}
+	if (!PageAnon(page)) {
+		/* Not an anonymous page! */
+		ret = 0;
+		goto unlock_page;
+	}
+	if (PageRamcrypt(page)) {
+		/* Physical page should be not encrypted */
+		ret = 0;
+		goto unlock_page;
+	}
+
+	/* do COW if page is mapped more than once */
+	if (page_mapcount(page) > 1) {
+		if (unlikely(anon_vma_prepare(evma))) {
+			ret = VM_FAULT_OOM;
+			goto unlock_page;
+		}
+	
+		new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, evma, encaddr);
+		if (!new_page) {
+			ret = VM_FAULT_OOM;
+			goto unlock_page;
+		}
+		cow_user_page(new_page, page, encaddr, evma);
+		__SetPageUptodate(new_page);
+
+		SetPageRamcrypt(new_page);
+		maddr = kmap(new_page);
+		ramcrypt_page_encrypt(maddr, encaddr & PAGE_MASK,
+					current->ramcrypt_iv);
+		kunmap(new_page);
+
+		if (mem_cgroup_try_charge(new_page, mm, GFP_KERNEL, &memcg)) {
+			page_cache_release(new_page);
+			ret = VM_FAULT_OOM;
+			goto unlock_page;
+		}
+
+		mmun_start = encaddr & PAGE_MASK;
+		mmun_end = mmun_start + PAGE_SIZE;
+		mmu_notifier_invalidate_range_start(mm, mmun_start, mmun_end);
+
+		flush_cache_page(evma, encaddr, pte_pfn(*epte));
+		entry = mk_pte(new_page, evma->vm_page_prot);
+		entry = pte_mkdirty(entry);
+		entry = pte_clrpresent(entry);
+		entry = pte_mkramcrypt(entry);
+
+		ptep_clear_flush_notify(evma, encaddr, epte);
+		page_add_new_anon_rmap(new_page, evma, encaddr);
+		mem_cgroup_commit_charge(new_page, memcg, false);
+		lru_cache_add_active_or_unevictable(new_page, evma);
+
+		set_pte_at_notify(mm, encaddr, epte, entry);
+		update_mmu_cache(evma, encaddr, epte);
+
+		page_remove_rmap(page);
+
+		if (evma->vm_flags & VM_LOCKED)
+			munlock_vma_page(page);
+
+		if (mmun_end > mmun_start)
+			mmu_notifier_invalidate_range_end(mm, mmun_start,
+								mmun_end);
+	} else {
+		/* clr present and set ramcrypt bit */
+		flush_cache_page(evma, encaddr, pte_pfn(*epte));
+		entry = pte_mkdirty(*epte);
+		entry = pte_clrpresent(entry);
+		entry = pte_mkramcrypt(entry);
+		ptep_clear_flush_notify(evma, encaddr, epte);
+		set_pte_at_notify(mm, encaddr, epte, entry);
+		update_mmu_cache(evma, encaddr, epte);
+
+		SetPageRamcrypt(page);
+		maddr = kmap(page);
+		ramcrypt_page_encrypt(maddr, encaddr & PAGE_MASK,
+					current->ramcrypt_iv);
+		kunmap(page);
+	}
+
+unlock_page:
+	unlock_page(page);
+unlock:
+	pte_unmap_unlock(epte, eptl);
+release_sem:
+	up(&mm->ramcrypt_sem);
+	return ret;
+
+#else /* CONFIG_RAMCRYPT */
+
+	return handle_pte_fault(mm, vma, address, pte, pmd, flags);
+
+#endif /* CONFIG_RAMCRYPT */
 }
 
 /*
